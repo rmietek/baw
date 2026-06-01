@@ -61,20 +61,36 @@ const ENC_KEY = crypto.scryptSync(
 function encryptPayload(payload) {
   const iv     = crypto.randomBytes(12);  // losowy wektor inicjalizacji 96-bit
   const cipher = crypto.createCipheriv('aes-256-gcm', ENC_KEY, iv);
+  // cipher — obiekt szyfratora AES-256-GCM, łączy klucz (ENC_KEY) i wektor (iv);
+  //          sam w sobie nic nie szyfruje — to tylko skonfigurowane "narzędzie"
   const enc    = Buffer.concat([cipher.update(JSON.stringify(payload), 'utf8'), cipher.final()]);
+  // enc — wynik szyfrowania: cipher.update() szyfruje dane wejściowe, cipher.final() kończy
+  //       i zwraca ostatni blok; concat skleja oba fragmenty w jeden bufor bajtów (szyfrogram)
   const tag    = cipher.getAuthTag();    // tag autentyczności (zapobiega modyfikacji)
   return `${iv.toString('base64url')}.${tag.toString('base64url')}.${enc.toString('base64url')}`;
+  //      ↑ wektor (iv)              ↑ tag autentyczności         ↑ szyfrogram (zaszyfrowany payload)
 }
 
 // Odszyfrowuje ciąg z encryptPayload z powrotem do obiektu JS.
 // Weryfikacja tagu zapewnia integralność — zmodyfikowany ciphertext zostanie odrzucony.
 function decryptPayload(str) {
   const [ivB64, tagB64, encB64] = str.split('.');
+  //      ↑ wektor   ↑ tag   ↑ szyfrogram — rozdzielenie stringa z powrotem na 3 części
+
   const decipher = crypto.createDecipheriv('aes-256-gcm', ENC_KEY, Buffer.from(ivB64, 'base64url'));
+  // decipher — obiekt odszyfratora, potrzebuje tego samego klucza (ENC_KEY) i wektora (iv) co szyfrowanie
+
   decipher.setAuthTag(Buffer.from(tagB64, 'base64url'));
+  // ustawia tag autentyczności — decipher.final() sprawdzi czy tag się zgadza;
+  // jeśli szyfrogram był zmodyfikowany, tag nie pasuje i final() rzuci wyjątek
+
   const dec = Buffer.concat([decipher.update(Buffer.from(encB64, 'base64url')), decipher.final()]);
+  // dec — odszyfrowane bajty; update() deszyfruje dane, final() kończy i weryfikuje tag
+
   return JSON.parse(dec.toString('utf8'));
+  // zamienia bajty → string UTF-8 → obiekt JS ({ id, role, ... })
 }
+
 
 // ── CORS ─────────────────────────────────────────────────────
 // Zezwala na żądania tylko z zaufanych origin (allowlista z .env).
@@ -159,28 +175,69 @@ app.use((req, res, next) => {
 //   HSTS                             — wymusza HTTPS przez rok (preload)
 //   Content-Security-Policy          — zezwala na skrypty tylko z nonce lub 'self'
 //   Usuwa X-Powered-By               — ukrywa informację o Express
+// Middleware ustawiający nagłówki bezpieczeństwa HTTP na każdej odpowiedzi.
+// Wykonuje się przed każdym endpointem — klient zawsze dostaje te nagłówki.
 app.use((_req, res, next) => {
-  const nonce = crypto.randomBytes(16).toString('base64'); // losowy nonce per-request
-  res.locals.nonce = nonce;
+  const nonce = crypto.randomBytes(16).toString('base64');
+  // losowy token 128-bit generowany per-request — inny dla każdej odpowiedzi;
+  // tylko skrypty z tym nonce w atrybucie <script nonce="..."> zostaną uruchomione
+  res.locals.nonce = nonce; // dostępny w szablonach jeśli backend renderuje HTML
 
-  res.setHeader('X-Frame-Options',              'DENY');
-  res.setHeader('X-Content-Type-Options',       'nosniff');
-  res.setHeader('X-XSS-Protection',             '1; mode=block');
-  res.setHeader('Referrer-Policy',              'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy',           'camera=(), microphone=(), geolocation=()');
-  res.setHeader('Strict-Transport-Security',    'max-age=31536000; includeSubDomains; preload');
+  res.setHeader('X-Frame-Options', 'DENY');
+  // blokuje osadzanie strony w <iframe> na jakiejkolwiek innej stronie
+  // chroni przed clickjackingiem — atakiem gdzie ofiara klika na niewidoczny element
+
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // przeglądarka nie będzie zgadywać typu pliku z jego zawartości —
+  // musi zaufać Content-Type z nagłówka; blokuje wykonanie pliku tekstowego jako skryptu
+
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  // stary mechanizm ochrony przed XSS w IE/starszych przeglądarkach —
+  // nowsze przeglądarki ignorują go (zastąpiony przez CSP), ale nie szkodzi go zostawić
+
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // kontroluje co trafia do nagłówka Referer przy nawigacji —
+  // cross-origin: wysyła tylko domenę (nie pełny URL ze ścieżką), same-origin: pełny URL
+
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // wyłącza dostęp do API przeglądarki — aplikacja nie potrzebuje kamery, mikrofonu ani GPS;
+  // nawet wstrzyknięty skrypt nie uzyska do nich dostępu
+
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  // HSTS: przeglądarka przez rok pamięta żeby zawsze używać HTTPS dla tej domeny —
+  // HTTP jest blokowane nawet przy pierwszym wejściu; preload = wpis w liście przeglądarek
+
   res.setHeader('Content-Security-Policy',
     `default-src 'self'; ` +
-    `script-src 'self' 'nonce-${nonce}'; ` +               // skrypty tylko z tym nonce
+    // domyślnie zasoby tylko z własnej domeny
+
+    `script-src 'self' 'nonce-${nonce}'; ` +
+    // skrypty: tylko własna domena LUB skrypt z pasującym nonce —
+    // wstrzyknięty <script> bez nonce nie zostanie uruchomiony nawet jeśli trafi na stronę
+
     `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; ` +
+    // style: własna domena, inline CSS (potrzebne dla frameworków) i Google Fonts
+
     `font-src 'self' https://fonts.gstatic.com; ` +
+    // czcionki: własna domena i CDN Google Fonts
+
     `img-src 'self' data: blob:; ` +
-    `connect-src 'self' http://api.nbp.pl; ` +             // AJAX tylko do własnego API i NBP
-    `frame-ancestors 'none';`                              // zakaz osadzania w ramkach
+    // obrazki: własna domena, data URI (np. QR kod base64) i blob URL (podgląd pliku)
+
+    `connect-src 'self' http://api.nbp.pl; ` +
+    // fetch/XHR: tylko własne API i NBP (kurs walut) — blokuje wysyłanie danych na obce serwery
+
+    `frame-ancestors 'none';`
+    // nikt nie może osadzić tej strony w <iframe> — nowszy odpowiednik X-Frame-Options
   );
+
   res.removeHeader('X-Powered-By');
+  // usuwa nagłówek "X-Powered-By: Express" — nie ujawniamy wersji frameworka atakującemu
+
   next();
 });
+
+
 
 // ── Helper sanityzacji wejść ─────────────────────────────────
 // Usuwa CAŁY HTML z ciągu (tagi, atrybuty, encje, javascript:).
@@ -208,6 +265,7 @@ db.connect(err => {
   });
 
   // Migracja: dodaje kolumnę password_hash jeśli nie istnieje (stara baza)
+  // Sprawdza czy kolumna password_hash już istnieje w tabeli users — zanim spróbuje ją dodać.
   db.query(
     `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'password_hash'`,
@@ -221,6 +279,7 @@ db.connect(err => {
   );
 
   // Migracja: dodaje kolumny google_id i email jeśli nie istnieją
+  // Sprawdza czy kolumna google_id już istnieje w tabeli users — zanim spróbuje ją dodać.
   db.query(
     `SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'google_id'`,
@@ -272,43 +331,55 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     passReqToCallback: true
   }, async (req, _accessToken, _refreshToken, profile, done) => {
     try {
-      const googleId = profile.id;
+      const googleId = profile.id;   // unikalny ID konta Google — nigdy się nie zmienia
       const email    = profile.emails?.[0]?.value || null;
+      // ?.[0]?.value — optional chaining: Google może nie zwrócić emaila (brak lub prywatne konto)
 
       const isRegister = req.session?.oauthIntent === 'register';
+      // intent zapisany w sesji PRZED przekierowaniem do Google — klient nie może go podmienić
 
-      // Szukaj istniejącego konta po google_id
+      // --- PRZYPADEK 1: konto już istnieje po google_id (poprzednie logowanie przez Google) ---
       let [rows] = await dbp.execute('SELECT * FROM users WHERE google_id = ?', [googleId]);
       if (rows[0]) {
         if (isRegister) return done(null, false, { message: 'exists' });
+        // próba rejestracji gdy konto już istnieje → odrzuć zamiast duplikować
         console.info(`[OAUTH] Login: ${rows[0].agent_id}`);
-        return done(null, rows[0]);
+        return done(null, rows[0]); // done(null, user) — Passport uzna logowanie za udane
       }
 
-      // Szukaj istniejącego konta po adresie email i połącz z google_id
+      // --- PRZYPADEK 2: brak konta po google_id, ale jest konto z tym samym emailem ---
+      // np. użytkownik wcześniej zarejestrował się hasłem, teraz loguje się przez Google
       if (email) {
         [rows] = await dbp.execute('SELECT * FROM users WHERE email = ?', [email]);
         if (rows[0]) {
           if (isRegister) return done(null, false, { message: 'exists' });
           await dbp.execute('UPDATE users SET google_id = ? WHERE id = ?', [googleId, rows[0].id]);
+          // połącz oba konta — od teraz można logować się i hasłem i przez Google
           console.info(`[OAUTH] Linked google_id to existing: ${rows[0].agent_id}`);
           return done(null, { ...rows[0], google_id: googleId });
+          // spread ...rows[0] kopiuje stare dane, google_id nadpisuje NULL który był w rows[0]
         }
       }
 
-      // Nowe konto — tylko role OBSERWATOR lub ANALITYK (nie OPERACYJNY)
+      // --- PRZYPADEK 3: zupełnie nowe konto ---
       console.info(`[OAUTH] New account: googleId=${googleId} email=${email}`);
-      const agentId   = `GOOGLE-${googleId.slice(0, 8).toUpperCase()}`;
-      const allowed   = ['OBSERWATOR', 'ANALITYK'];
+      const agentId = `GOOGLE-${googleId.slice(0, 8).toUpperCase()}`;
+      // automatyczny login: pierwsze 8 znaków google_id jako identyfikator w aplikacji
+
+      const allowed = ['OBSERWATOR', 'ANALITYK'];
       if (!allowed.includes(req.session?.oauthRole))
         return done(null, false, { message: 'invalid_role' });
+      // rola OPERACYJNY jest wykluczona — nie można uzyskać uprawnień admina przez OAuth
+
       await dbp.execute(
         'INSERT INTO users (agent_id, password, password_hash, role, email, google_id) VALUES (?, ?, ?, ?, ?, ?)',
         [agentId, '', '', req.session.oauthRole, email, googleId]
+        // password i password_hash puste — konto OAuth nie ma hasła lokalnego
       );
       const [newRows] = await dbp.execute('SELECT * FROM users WHERE agent_id = ?', [agentId]);
+      // ponowne SELECT żeby pobrać id nadane przez AUTO_INCREMENT — nie znamy go po INSERT
       done(null, newRows[0]);
-    } catch (err) { done(err); }
+    } catch (err) { done(err); } // done(err) — Passport przekaże błąd do error handlera
   }));
 }
 
@@ -453,18 +524,28 @@ db.query(`CREATE TABLE IF NOT EXISTS live_feed (
 // Limit 5 MB na plik zapobiega atakom DoS przez duże pliki.
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
+// tworzy folder uploads jeśli nie istnieje — bez tego multer rzuciłby błąd przy pierwszym uploadzie
 
+// To pierwsza warstwa walidacji po stronie klienta (MIME z nagłówka HTTP).
+// Klient może podać fałszywy MIME — dlatego w endpoincie /api/upload jest druga warstwa:
+// weryfikacja po magic bytes (rzeczywiste bajty pliku), która tego nie da się sfałszować.
 const ALLOWED_MIMES = ['image/jpeg','image/png','image/gif','image/webp','application/pdf','text/plain'];
+
 const uploadHandler = multer({
   storage: multer.diskStorage({
     destination: uploadsDir,
+    // tymczasowa nazwa: "tmp_" + timestamp + oryginalna nazwa
+    // prefix "tmp_" sygnalizuje że plik czeka na weryfikację magic bytes
+    // path.basename() usuwa ścieżki z nazwy pliku (ochrona przed path traversal już tutaj)
     filename: (_req, file, cb) => cb(null, 'tmp_' + Date.now() + '_' + path.basename(file.originalname)),
   }),
   fileFilter: (_req, file, cb) => {
+    // cb(null, true)  — akceptuj plik
+    // cb(new Error)   — odrzuć plik z błędem zanim trafi na dysk
     if (ALLOWED_MIMES.includes(file.mimetype)) cb(null, true);
     else cb(new Error(`Niedozwolony typ pliku: ${file.mimetype}`));
   },
-  limits: { fileSize: 5 * 1024 * 1024 }, // maksymalny rozmiar pliku: 5 MB
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB — ochrona przed DoS przez duże pliki
 });
 
 // ===============================================================================
@@ -513,30 +594,36 @@ setInterval(() => {
 // 5. Jeśli 2FA aktywne → zwraca preAuthToken (TTL 5 min), nie wystawia JWT
 // 6. Jeśli 2FA nieaktywne → wystawia pełny JWT w HttpOnly cookie
 app.post('/api/login', async (req, res) => {
-  const ip       = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
+  const ip  = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
+  // x-forwarded-for: prawdziwe IP klienta gdy aplikacja stoi za proxy/load balancerem
+  // split(',')[0]: bierzemy pierwszy IP — może być kilka jeśli żądanie przeszło przez wiele proxy
   const now      = Date.now();
   const username = (req.body.username || '').trim();
   const password = req.body.password || '';
 
   if (!username || !password) return res.status(400).json({ error: 'Brak danych' });
 
-  // Blokada po IP
+  // --- BLOKADA PO IP (sliding window) ---
+  // filtrujemy tablicę timestampów — zostają tylko próby z ostatnich 15 minut
   const ipHits = (_ipAttempts.get(ip) || []).filter(t => now - t < LOGIN_WINDOW_MS);
   if (ipHits.length >= MAX_IP_HITS) {
+    // przekroczono limit 20 prób z tego IP w oknie 15 min → 429 Too Many Requests
     console.warn(`[AUTH] IP rate-limit: ${ip} (${ipHits.length} prób w 15 min)`);
     return res.status(429).json({ error: 'Zbyt wiele prób logowania. Poczekaj 15 minut.' });
   }
-  ipHits.push(now);
-  _ipAttempts.set(ip, ipHits);
+  ipHits.push(now);           // zapisz timestamp tej próby
+  _ipAttempts.set(ip, ipHits); // zaktualizuj licznik w pamięci
 
-  // Blokada po koncie
-  const key = username.toLowerCase();
+  // --- BLOKADA PO KONCIE (hard lock po N próbach) ---
+  const key = username.toLowerCase(); // klucz case-insensitive — "ADMIN" i "admin" to to samo konto
   const acc  = _accountAttempts.get(key) || { attempts: [], lockedUntil: 0 };
   if (now < acc.lockedUntil) {
+    // konto zablokowane — informujemy ile minut zostało do odblokowania
     const remainMin = Math.ceil((acc.lockedUntil - now) / 60000);
     console.warn(`[AUTH] Locked account attempt: ${username} from ${ip}`);
     return res.status(429).json({ error: `Konto zablokowane. Spróbuj ponownie za ${remainMin} min.` });
   }
+  // czyścimy stare próby spoza okna czasowego przed sprawdzeniem limitu
   acc.attempts = acc.attempts.filter(t => now - t < LOGIN_WINDOW_MS);
 
   try {
@@ -544,10 +631,13 @@ app.post('/api/login', async (req, res) => {
     const [rows] = await dbp.execute('SELECT * FROM users WHERE agent_id = ?', [username]);
     const u = rows[0];
 
-    // Jednolity komunikat błędu — nie ujawnia czy login istnieje (ochrona przed enumeracją)
+    // deny() — wewnętrzna funkcja wywoływana przy każdym błędzie logowania.
+    // Jeden komunikat "Nieprawidłowe dane logowania" niezależnie od przyczyny —
+    // nie zdradza czy login istnieje (ochrona przed account enumeration).
     const deny = () => {
-      acc.attempts.push(now);
+      acc.attempts.push(now); // zlicz nieudaną próbę
       if (acc.attempts.length >= MAX_ACCOUNT_HITS) {
+        // przekroczono limit 5 prób → blokada konta na 30 minut
         acc.lockedUntil = now + ACCOUNT_LOCK_MS;
         console.warn(`[AUTH] Account locked: ${username} from ${ip} (${acc.attempts.length} prób)`);
       } else {
@@ -557,37 +647,42 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Nieprawidłowe dane logowania' });
     };
 
-    if (!u) return deny();
-    if (!u.password_hash) return deny();
+    if (!u) return deny();              // login nie istnieje — ten sam komunikat co złe hasło
+    if (!u.password_hash) return deny(); // konto OAuth bez hasła lokalnego — blokuj
 
-    // bcrypt.compare: stała czasowo, nie ujawnia przez timing attack czy hash pasuje
+    // bcrypt.compare porównuje hasło z hashem — działa w stałym czasie (constant-time),
+    // nie ujawnia przez timing attack czy hasło jest bliskie poprawnemu
     const ok = await bcrypt.compare(password, u.password_hash);
     if (!ok) return deny();
 
-    // Sukces — czyść licznik prób dla konta
+    // Sukces — resetuj licznik prób dla tego konta
     _accountAttempts.delete(key);
     console.info(`[AUTH] Login OK: ${username} from ${ip}`);
 
-    // 2FA aktywne → wystawiamy tymczasowy preAuthToken zamiast pełnego JWT
+    // 2FA aktywne → wystawiamy tymczasowy preAuthToken bez roli (ważny 5 min).
+    // Pełny JWT zostanie wystawiony dopiero po weryfikacji kodu TOTP w /api/2fa/login.
     if (u.totp_enabled) {
       const preAuthToken = jwt.sign(
-        { d: encryptPayload({ id: u.id, preAuth: true }) },
+        { d: encryptPayload({ id: u.id, preAuth: true }) }, // tylko id — brak roli celowo
         process.env.JWT_SECRET,
         { expiresIn: '5m', algorithm: 'HS256' }
       );
       return res.json({ requires2FA: true, preAuthToken });
     }
 
-    // Pełny JWT — payload zaszyfrowany AES-256-GCM, przechowywany w HttpOnly cookie
+    // Pełny JWT — payload zaszyfrowany AES-256-GCM, token ważny 3 minuty.
+    // mfa: true oznacza że logowanie zostało ukończone (brak 2FA lub 2FA zweryfikowane).
     const token = jwt.sign(
       { d: encryptPayload({ id: u.id, agent_id: u.agent_id, role: u.role, mfa: true }) },
       process.env.JWT_SECRET,
       { expiresIn: '3m', algorithm: 'HS256' }
     );
-    res.cookie('token', token, COOKIE_OPT);
+    res.cookie('token', token, COOKIE_OPT); // HttpOnly cookie — JS nie ma dostępu
     const decoded = jwt.decode(token);
     res.json({ ok: true, agent_id: u.agent_id, role: u.role, expiresAt: decoded.exp * 1000 });
+    // expiresAt w milisekundach — frontend używa do odświeżenia tokenu przed wygaśnięciem
   } catch { res.status(500).json({ error: 'Internal Server Error' }); }
+  // błędy nie ujawniają szczegółów — stack trace trafia tylko do logów serwera
 });
 
 // ── POST /api/register ────────────────────────────────────────
@@ -600,6 +695,10 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/register', async (req, res) => {
   const ip  = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
   const now = Date.now();
+
+  // --- RATE LIMITING REJESTRACJI (sliding window, 24h) ---
+  // osobny licznik od logowania — max 10 rejestracji z jednego IP na dobę
+  // chroni przed masowym zakładaniem kont (spam, boty)
   const regHits = (_registerAttempts.get(ip) || []).filter(t => now - t < REGISTER_WINDOW_MS);
   if (regHits.length >= MAX_REGISTER_HITS)
     return res.status(429).json({ error: 'Zbyt wiele rejestracji z tego adresu. Spróbuj za 24h.' });
@@ -608,25 +707,39 @@ app.post('/api/register', async (req, res) => {
 
   const { password, role } = req.body;
   const agent_id = (req.body.agent_id || '').trim();
+
+  // --- WALIDACJA DANYCH WEJŚCIOWYCH (allowlisting) ---
+  // każdy warunek sprawdzany osobno — klient dostaje konkretny komunikat co jest nie tak
   if (!agent_id)             return res.status(400).json({ error: 'Podaj ID agenta' });
   if (agent_id.length < 3)   return res.status(400).json({ error: 'ID agenta musi mieć co najmniej 3 znaki' });
   if (agent_id.length > 50)  return res.status(400).json({ error: 'ID agenta max 50 znaków' });
   if (!/^[A-Za-z0-9_\-]+$/.test(agent_id))
     return res.status(400).json({ error: 'ID agenta może zawierać tylko litery, cyfry, _ i -' });
+  // regex allowlist — akceptuje tylko bezpieczne znaki, blokuje np. spacje, HTML, SQL
+
   if (!password)             return res.status(400).json({ error: 'Podaj hasło' });
   if (password.length < 8)   return res.status(400).json({ error: 'Hasło musi mieć co najmniej 8 znaków' });
+
+  // allowlista ról — OPERACYJNY celowo pominięty, nie można zarejestrować się jako admin
   const allowedRoles = ['OBSERWATOR', 'ANALITYK'];
   if (!allowedRoles.includes(role))
     return res.status(400).json({ error: 'Wybierz prawidłową rolę: OBSERWATOR lub ANALITYK' });
+
   try {
-    const hash = await bcrypt.hash(password, 12); // work factor 12 — ok. 250ms na bcrypt
+    const hash = await bcrypt.hash(password, 12);
+    // cost factor 12 — ok. 250ms/hash, brute-force po wycieku bazy praktycznie niemożliwy
+
     await dbp.execute(
       'INSERT INTO users (agent_id, password, password_hash, role) VALUES (?, ?, ?, ?)',
       [agent_id, '', hash, role]
+      // password (plaintext) celowo pusty — przechowujemy tylko hash
+      // prepared statement — parametry nie mogą zawierać złośliwego SQL
     );
     res.json({ ok: true, message: 'Konto utworzone' });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Agent ID już istnieje' });
+    // ER_DUP_ENTRY — MySQL zwraca ten kod gdy naruszony jest UNIQUE constraint na agent_id
+    // nie ujawniamy szczegółów innych błędów — tylko ogólny 500
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -648,42 +761,69 @@ app.get('/api/auth/google', (req, res, next) => {
   passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
 });
 
+
+
+
+
 // ── Google OAuth — callback ───────────────────────────────────
 // Po powrocie od Google: jeśli 2FA aktywne → preAuthToken,
 // w przeciwnym razie wystawia pełny JWT i przekierowuje do frontendu.
+// Callback wywoływany przez Google po zalogowaniu użytkownika.
+// Trasa składa się z trzech middleware wykonanych po kolei:
 app.get('/api/auth/google/callback',
+
+  // MIDDLEWARE 1: Passport weryfikuje kod autoryzacyjny od Google i wywołuje GoogleStrategy
+  // (logika w strategi wyżej — szuka/tworzy konto, wywołuje done(null, user))
+  // failureRedirect — gdy done(null, false) lub błąd → przekieruj na stronę błędu
   passport.authenticate('google', {
     failureRedirect: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/?oauth=error`,
-    failureMessage: true
+    failureMessage: true // przekazuje wiadomość z done(null, false, { message }) do req.authInfo
   }),
+
+  // MIDDLEWARE 2: obsługa przypadku gdy konto już istnieje (próba rejestracji istniejącym kontem)
+  // req.authInfo pochodzi z trzeciego argumentu done() w strategii: done(null, false, { message: 'exists' })
   (req, res, next) => {
     if (req.authInfo?.message === 'exists') {
       return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/?oauth=exists`);
     }
-    next();
+    next(); // brak problemu → przekaż do trzeciego middleware
   },
-  async (req, res) => {
-    const u = req.user;
 
+  // MIDDLEWARE 3: użytkownik zalogowany (req.user ustawiony przez Passport) → wystawiamy token
+  async (req, res) => {
+    const u = req.user; // obiekt użytkownika zwrócony przez done(null, user) w strategii
+
+    // --- PRZYPADEK 1: użytkownik ma włączone 2FA ---
+    // nie możemy dać pełnego JWT bo logowanie nie jest jeszcze ukończone
     if (u.totp_enabled) {
       const preAuthToken = jwt.sign(
-        { d: encryptPayload({ id: u.id, preAuth: true }) },
+        { d: encryptPayload({ id: u.id, preAuth: true }) }, // tylko id, brak roli
         process.env.JWT_SECRET,
         { expiresIn: '5m', algorithm: 'HS256' }
       );
       const base = process.env.FRONTEND_URL || 'http://localhost:3000';
+      // preAuthToken w URL-u bo to redirect — nie możemy tu ustawić cookie ani zwrócić JSON
       return res.redirect(`${base}/?oauth=needs2fa&pre=${encodeURIComponent(preAuthToken)}`);
+      // encodeURIComponent — token może zawierać znaki specjalne (np. =, +) które psują URL
     }
 
+    // --- PRZYPADEK 2: brak 2FA → od razu pełny JWT ---
     const token = jwt.sign(
       { d: encryptPayload({ id: u.id, agent_id: u.agent_id, role: u.role, mfa: true }) },
       process.env.JWT_SECRET,
       { expiresIn: '3m', algorithm: 'HS256' }
     );
+    // sameSite: 'Lax' zamiast 'Strict' — bo to redirect z Google (obca domena),
+    // Strict blokowałby ustawienie cookie przy tej nawigacji
     res.cookie('token', token, { httpOnly: true, sameSite: 'Lax', secure: IS_PROD });
     res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/?oauth=success`);
+    // frontend po /?oauth=success wywołuje /api/me żeby pobrać dane zalogowanego użytkownika
   }
 );
+
+
+
+
 
 // ===============================================================================
 // 2FA (TOTP)
@@ -693,47 +833,87 @@ app.get('/api/auth/google/callback',
 // Krok 2 logowania: weryfikuje kod TOTP po podaniu hasła.
 // Przyjmuje preAuthToken (tymczasowy, TTL 5 min) + 6-cyfrowy kod.
 // Po poprawnej weryfikacji wystawia pełny JWT w HttpOnly cookie.
+// Krok 2 logowania z 2FA — wywoływany po wpisaniu kodu TOTP przez użytkownika.
+// Przyjmuje preAuthToken (z kroku 1) i 6-cyfrowy kod z aplikacji mobilnej.
 app.post('/api/2fa/login', async (req, res) => {
   const { preAuthToken, code } = req.body;
   if (!preAuthToken || !code) return res.status(400).json({ error: 'Brak danych' });
   try {
+    // weryfikacja preAuthToken — sprawdza podpis HMAC i czy token nie wygasł (5 min)
+    // jeśli token sfałszowany lub wygasły → jwt.verify() rzuci wyjątek → catch → 401
     const { d } = jwt.verify(preAuthToken, process.env.JWT_SECRET, { algorithms: ['HS256'] });
-    const payload = decryptPayload(d);
+    const payload = decryptPayload(d); // odszyfrowanie AES-GCM → { id, preAuth: true }
+
     if (!payload.preAuth) return res.status(400).json({ error: 'Nieprawidłowy token' });
+    // flaga preAuth: true oznacza że to tymczasowy token z kroku 1, nie pełny JWT —
+    // ktoś nie może wysłać zwykłego tokenu sesji zamiast preAuthToken
+
     const [rows] = await dbp.execute('SELECT * FROM users WHERE id = ?', [payload.id]);
     const u = rows[0];
     if (!u?.totp_secret) return res.status(400).json({ error: 'Błąd weryfikacji' });
+    // totp_secret powinien istnieć jeśli 2FA było włączone — brak = niespójność danych
+
+    // authenticator.check(): oblicza oczekiwany kod TOTP z sekretu i aktualnego czasu,
+    // porównuje z kodem podanym przez użytkownika (window: 1 → akceptuje ±30 sekund tolerancji)
     if (!authenticator.check(code, u.totp_secret)) return res.status(401).json({ error: 'Nieprawidłowy kod 2FA' });
+
+    // oba kroki zaliczone (hasło + TOTP) → wystawiamy pełny JWT z rolą i flagą mfa: true
     const token = jwt.sign(
       { d: encryptPayload({ id: u.id, agent_id: u.agent_id, role: u.role, mfa: true }) },
       process.env.JWT_SECRET,
       { expiresIn: '3m', algorithm: 'HS256' }
     );
-    res.cookie('token', token, COOKIE_OPT);
+    res.cookie('token', token, COOKIE_OPT); // HttpOnly, SameSite: Strict
     const decoded = jwt.decode(token);
     res.json({ ok: true, agent_id: u.agent_id, role: u.role, expiresAt: decoded.exp * 1000 });
+    // expiresAt w ms → frontend wie kiedy odświeżyć token zanim wygaśnie po 3 minutach
   } catch { res.status(401).json({ error: 'Nieprawidłowy lub wygasły token' }); }
+  // catch obsługuje: wygasły preAuthToken, zły podpis, błąd odszyfrowania —
+  // jeden komunikat, nie ujawniamy powodu odrzucenia
 });
+
+
 
 // ── POST /api/2fa/setup ───────────────────────────────────────
 // Generuje sekret TOTP i zwraca QR kod w formacie data URL.
 // Frontend wyświetla QR do zeskanowania w aplikacji typu Google Authenticator.
 // Sekret zapisywany w bazie — 2FA nie jest jeszcze aktywne (wymaga /enable).
+// Krok 1 aktywacji 2FA — generuje sekret i zwraca QR kod do zeskanowania w aplikacji mobilnej.
+// Samo wywołanie tego endpointu NIE włącza jeszcze 2FA — dopiero /api/2fa/enable to robi
+// po potwierdzeniu że użytkownik poprawnie zeskanował kod i wpisał pierwszy poprawny kod TOTP.
 app.post('/api/2fa/setup', async (req, res) => {
   const payload = getJwtPayload(req);
   if (!payload) return res.status(401).json({ error: 'Niezalogowany' });
   try {
-    const secret  = authenticator.generateSecret();
+    const secret = authenticator.generateSecret();
+    // losowy sekret base32 (~20 znaków) — współdzielony między serwerem a aplikacją mobilną;
+    // obie strony używają go niezależnie do obliczenia tego samego kodu co 30 sekund
+
     const otpauth = authenticator.keyuri(payload.agent_id, 'MONITOR_KONFLIKTU_W_IRANIE', secret);
+    // otpauth:// to standardowy URI odczytywany przez Google Authenticator, Authy itp.
+    // format: otpauth://totp/APLIKACJA:LOGIN?secret=SEKRET&issuer=APLIKACJA
+    // aplikacja mobilna skanuje QR, odczytuje URI i zapisuje sekret lokalnie
+
     const qrDataUrl = await QRCode.toDataURL(otpauth);
+    // zamienia otpauth URI na obrazek QR jako data:image/png;base64,...
+    // frontend wyświetla go jako <img src={qrDataUrl}> — użytkownik skanuje telefonem
+
     await dbp.execute('UPDATE users SET totp_secret = ? WHERE id = ?', [secret, payload.id]);
+    // sekret zapisany w bazie, ale totp_enabled pozostaje FALSE —
+    // 2FA nie jest jeszcze aktywne, dopiero /api/2fa/enable ustawia totp_enabled = TRUE
+
     res.json({ qrDataUrl });
+    // frontend dostaje tylko obrazek QR — sam sekret nigdy nie opuszcza serwera w odpowiedzi
   } catch { res.status(500).json({ error: 'Internal Server Error' }); }
 });
 
+
+
+
 // ── POST /api/2fa/enable ──────────────────────────────────────
-// Aktywuje 2FA po podaniu pierwszego poprawnego kodu z aplikacji.
-// Weryfikacja przed aktywacją zapewnia że użytkownik poprawnie skonfigurował apkę.
+// Krok 2 aktywacji 2FA — użytkownik wpisuje pierwszy kod z aplikacji mobilnej.
+// Weryfikuje że telefon poprawnie zeskanował QR i oblicza kody z tego samego sekretu.
+// Dopiero tutaj totp_enabled = TRUE — kolejne logowania będą wymagać kodu TOTP.
 app.post('/api/2fa/enable', async (req, res) => {
   const payload = getJwtPayload(req);
   if (!payload) return res.status(401).json({ error: 'Niezalogowany' });
@@ -742,8 +922,16 @@ app.post('/api/2fa/enable', async (req, res) => {
     const [rows] = await dbp.execute('SELECT totp_secret FROM users WHERE id = ?', [payload.id]);
     const secret = rows[0]?.totp_secret;
     if (!secret) return res.status(400).json({ error: 'Najpierw skonfiguruj 2FA' });
+    // brak sekretu = /api/2fa/setup nie był wywołany — nie ma czego włączać
+
     if (!authenticator.check(code, secret)) return res.status(401).json({ error: 'Nieprawidłowy kod — spróbuj ponownie' });
+    // weryfikacja kodu potwierdza że telefon poprawnie zeskanował QR —
+    // bez tego można by włączyć 2FA z błędnym sekretem i trwale zablokować dostęp do konta
+
     await dbp.execute('UPDATE users SET totp_enabled = TRUE WHERE id = ?', [payload.id]);
+    // dopiero tutaj 2FA staje się aktywne — od następnego logowania wymagany kod TOTP
+
+    // odświeżamy token żeby odzwierciedlał aktualny stan — mfa: true już przy tym żądaniu
     const token = jwt.sign(
       { d: encryptPayload({ id: payload.id, agent_id: payload.agent_id, role: payload.role, mfa: true }) },
       process.env.JWT_SECRET,
@@ -754,9 +942,16 @@ app.post('/api/2fa/enable', async (req, res) => {
   } catch { res.status(500).json({ error: 'Internal Server Error' }); }
 });
 
+
+
+
+
 // ── POST /api/2fa/disable ─────────────────────────────────────
 // Dezaktywuje 2FA — wymaga podania aktualnego kodu TOTP.
 // Zeruje totp_enabled i usuwa sekret z bazy.
+// Dezaktywacja 2FA — wymaga podania aktualnego kodu TOTP jako potwierdzenia.
+// Zabezpiecza przed wyłączeniem 2FA przez kogoś kto przejął sesję użytkownika —
+// bez fizycznego dostępu do telefonu nie zna kodu, więc nie może wyłączyć ochrony.
 app.post('/api/2fa/disable', async (req, res) => {
   const payload = getJwtPayload(req);
   if (!payload) return res.status(401).json({ error: 'Niezalogowany' });
@@ -764,35 +959,61 @@ app.post('/api/2fa/disable', async (req, res) => {
   try {
     const [rows] = await dbp.execute('SELECT totp_secret FROM users WHERE id = ?', [payload.id]);
     const secret = rows[0]?.totp_secret;
+
     if (!secret || !authenticator.check(code, secret)) return res.status(401).json({ error: 'Nieprawidłowy kod 2FA' });
+    // jeden warunek dla braku sekretu i złego kodu — nie ujawniamy czy 2FA w ogóle było włączone
+
     await dbp.execute('UPDATE users SET totp_enabled = FALSE, totp_secret = NULL WHERE id = ?', [payload.id]);
+    // totp_secret = NULL — sekret usunięty z bazy, nie tylko flaga wyłączona;
+    // przy ponownej aktywacji zostanie wygenerowany zupełnie nowy sekret przez /api/2fa/setup
+
     res.json({ ok: true });
   } catch { res.status(500).json({ error: 'Internal Server Error' }); }
 });
 
+
+
+
+
 // ── GET /api/me ───────────────────────────────────────────────
 // Zwraca dane bieżącego użytkownika z tokenu JWT (nie odpytuje bazy).
 // Używany przez frontend przy starcie do sprawdzenia czy sesja jest aktywna.
+// Sprawdza czy użytkownik jest zalogowany i zwraca jego dane z tokenu.
+// Wywoływany przez frontend przy starcie aplikacji żeby odtworzyć stan sesji po odświeżeniu strony.
+// Dane odczytywane z JWT — bez zapytania do bazy (token jest self-contained).
 app.get('/api/me', (req, res) => {
   const payload = getJwtPayload(req);
   if (!payload) return res.status(401).json({ error: 'Niezalogowany' });
+  // getJwtPayload zwraca null gdy: brak cookie, wygasły token lub zły podpis
+
   res.json({ ok: true, agent_id: payload.agent_id, role: payload.role, expiresAt: payload.exp * 1000 });
+  // exp to timestamp w sekundach (standard JWT) — mnożymy ×1000 żeby dostać milisekundy dla JS
+  // frontend używa expiresAt do zaplanowania odświeżenia tokenu przez /api/refresh zanim wygaśnie
 });
 
-// ── POST /api/refresh ─────────────────────────────────────────
-// Odświeża token JWT — wystawia nowy z TTL 3 min.
-// Frontend wywołuje tuż przed wygaśnięciem (SessionWarning component).
+
+
+
+
+// Odświeża token JWT — wystawia nowy z TTL 3 minut zastępując stary w cookie.
+// Frontend wywołuje tuż przed wygaśnięciem żeby sesja nie urwała się w trakcie pracy.
+// Wymaga ważnego tokenu — wygasły token nie może sam siebie odświeżyć (trzeba zalogować się ponownie).
 app.post('/api/refresh', (req, res) => {
   const payload = getJwtPayload(req);
   if (!payload) return res.status(401).json({ error: 'Niezalogowany' });
+  // jeśli token wygasł → getJwtPayload zwraca null → 401 → frontend przekieruje na login
+
   const token = jwt.sign(
     { d: encryptPayload({ id: payload.id, agent_id: payload.agent_id, role: payload.role, mfa: payload.mfa }) },
+    // dane kopiowane ze starego tokenu — rola nie jest pobierana z bazy,
+    // co oznacza że zmiana roli w bazie zadziała dopiero po wygaśnięciu obecnego tokenu
     process.env.JWT_SECRET,
     { expiresIn: '3m', algorithm: 'HS256' }
   );
-  res.cookie('token', token, COOKIE_OPT);
+  res.cookie('token', token, COOKIE_OPT); // nadpisuje stare cookie nowym tokenem
   const newPayload = jwt.decode(token);
   res.json({ ok: true, expiresAt: newPayload.exp * 1000 });
+  // frontend planuje kolejne odświeżenie na podstawie nowego expiresAt
 });
 
 // ── Globalny guard 2FA ────────────────────────────────────────
@@ -1196,32 +1417,41 @@ app.delete('/api/petition/:id', async (req, res) => {
 // Jeśli typy nie pasują → plik usuwany, błąd 400.
 // Nazwa pliku sanityzowana (tylko [a-zA-Z0-9._-]) — ochrona przed path traversal.
 // Unikalna nazwa z timestampem — zapobiega nadpisywaniu plików.
-app.post('/api/upload', async (req, res) => {
+apapp.post('/api/upload', async (req, res) => {
   const role = getRole(req);
   if (!role) return res.status(401).json({ error: 'Wymagane logowanie' });
   if (role === 'OBSERWATOR') return res.status(403).json({ error: 'Wymagana rola: ANALITYK lub wyższa' });
 
+  // uploadHandler.single('file') — multer przetwarza multipart/form-data i zapisuje plik na dysku
+  // jako "tmp_timestamp_nazwa" (pierwsza warstwa: sprawdza MIME z nagłówka HTTP i limit 5MB)
+  // callback (err) wywoływany po zakończeniu — err gdy zły MIME lub za duży plik
   uploadHandler.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'Brak pliku' });
 
+    // --- DRUGA WARSTWA WALIDACJI: magic bytes ---
+    // pliki binarne (obrazy, PDF) mają charakterystyczne bajty na początku (np. JPEG: FF D8 FF)
+    // klient nie może ich sfałszować — są częścią samego pliku, nie nagłówka HTTP
     const ALLOWED_REAL_MIMES = new Set([
       'image/jpeg','image/png','image/gif','image/webp','application/pdf'
     ]);
+    // pliki tekstowe nie mają magic bytes — dla nich sprawdzamy tylko rozszerzenie
     const ALLOWED_TEXT_EXTS = new Set(['.txt','.log','.csv','.md']);
 
     try {
-      const buf = fs.readFileSync(req.file.path);
-      const detected = await fileTypeFromBuffer(buf); // detekcja po magic bytes
+      const buf = fs.readFileSync(req.file.path); // wczytaj plik z dysku do bufora
+      const detected = await fileTypeFromBuffer(buf);
+      // fileTypeFromBuffer analizuje pierwsze bajty bufora i rozpoznaje format pliku
 
       if (detected) {
-        // Plik binarny — sprawdź czy MIME jest na allowliście
+        // plik binarny z magic bytes — sprawdź rzeczywisty MIME (nie ten z nagłówka HTTP)
         if (!ALLOWED_REAL_MIMES.has(detected.mime)) {
-          fs.unlinkSync(req.file.path);
+          fs.unlinkSync(req.file.path); // usuń plik z dysku natychmiast — nie przechowujemy odrzuconych
           return res.status(400).json({ error: `Niedozwolony typ pliku: ${detected.mime}` });
         }
       } else {
-        // Brak magic bytes (plik tekstowy) — sprawdź rozszerzenie
+        // brak magic bytes → prawdopodobnie plik tekstowy (txt, csv itp.)
+        // dla nich jedyną weryfikacją jest rozszerzenie — stąd wąska allowlista
         const ext = path.extname(req.file.originalname).toLowerCase();
         if (!ALLOWED_TEXT_EXTS.has(ext)) {
           fs.unlinkSync(req.file.path);
@@ -1229,20 +1459,24 @@ app.post('/api/upload', async (req, res) => {
         }
       }
     } catch {
-      try { fs.unlinkSync(req.file.path); } catch {}
+      try { fs.unlinkSync(req.file.path); } catch {} // spróbuj usunąć plik nawet gdy błąd odczytu
       return res.status(500).json({ error: 'Błąd weryfikacji pliku' });
     }
 
-    // Sanityzacja nazwy i nadanie unikalnej nazwy z timestampem
+    // --- SANITYZACJA NAZWY PLIKU ---
+    // path.basename() usuwa ścieżki (../../../etc/passwd → passwd) — ochrona przed path traversal
+    // regex [^a-zA-Z0-9._-] zastępuje wszystkie znaki specjalne podkreślnikiem
     const base = req.body.custom_filename
       ? path.basename(req.body.custom_filename).replace(/[^a-zA-Z0-9._-]/g, '_')
       : path.basename(req.file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
     const ext  = path.extname(base);
     const stem = path.basename(base, ext);
     const unique = `${stem}_${Date.now()}${ext}`;
+    // timestamp w nazwie zapobiega nadpisaniu istniejącego pliku o tej samej nazwie
+
     const targetPath = path.join(uploadsDir, unique);
-    fs.copyFileSync(req.file.path, targetPath);
-    fs.unlinkSync(req.file.path); // usuń plik tymczasowy
+    fs.copyFileSync(req.file.path, targetPath); // skopiuj z tmp_ do docelowej nazwy
+    fs.unlinkSync(req.file.path);               // usuń plik tymczasowy
     res.json({ ok: true, filename: unique, url: `/api/uploads/${unique}` });
   });
 });
