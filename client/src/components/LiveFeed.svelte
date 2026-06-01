@@ -1,18 +1,24 @@
 <script>
+  // Live Feed — symulacja transmisji na żywo z danych pobranych z bazy.
+  // Wiadomości pobierane raz z /api/livefeed, następnie wyświetlane cyklicznie co 4.5 s
+  // tworząc iluzję strumienia na żywo. Bufor ograniczony do 60 wpisów (stare usuwane).
   import { onMount } from 'svelte';
   import axios from 'axios';
 
+  // Generuje aktualny czas UTC w formacie HH:MM:SS UTC
   function nowStr() {
     const d = new Date();
     const p = n => String(n).padStart(2, '0');
     return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} UTC`;
   }
 
-  let msgs    = [];   // pobrane z bazy
-  let entries = [];
-  let idxRef  = 0;
-  let wrapEl;
+  let msgs    = [];   // wiadomości pobrane z bazy (źródło)
+  let entries = [];   // aktualnie wyświetlane wpisy (bufor 60 pozycji)
+  let idxRef  = 0;    // indeks cykliczny — po dojściu do końca wraca na początek
+  let wrapEl;         // referencja do elementu DOM — do auto-scrollowania na dół
 
+  // Dodaje kolejny wpis do bufora entries. Cyklicznie przechodzi przez msgs (modulo).
+  // Gdy bufor przekroczy 60 pozycji, usuwa najstarszy wpis (FIFO).
   function add() {
     if (!msgs.length) return;
     const msg = msgs[idxRef % msgs.length];
@@ -22,16 +28,20 @@
   }
 
   onMount(async () => {
+    // Pobiera wiadomości z bazy raz przy montowaniu komponentu
     try {
       const { data } = await axios.get('/api/livefeed');
       msgs = data;
-    } catch { /* fallback – brak danych */ }
+    } catch { /* brak danych — feed pozostaje pusty */ }
 
+    // Wypełnia bufor 8 wpisami od razu, potem dodaje nowy co 4.5 s
     for (let i = 0; i < 8; i++) add();
     const id = setInterval(add, 4500);
-    return () => clearInterval(id);
+    return () => clearInterval(id); // cleanup przy odmontowaniu
   });
 
+  // Reaktywny auto-scroll — przewija feed na dół za każdym razem gdy pojawi się nowy wpis.
+  // setTimeout(0) zapewnia że DOM jest już zaktualizowany przed pomiarem scrollHeight.
   $: if (wrapEl && entries.length) {
     setTimeout(() => { if (wrapEl) wrapEl.scrollTop = wrapEl.scrollHeight; }, 0);
   }

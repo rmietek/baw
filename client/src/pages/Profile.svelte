@@ -1,4 +1,7 @@
 <script>
+  // Strona profilu (pełnoekranowa) — analogiczna do ProfileModal, ale jako osobna strona.
+  // Zawiera: dane profilu (bio, dochód), zarządzanie 2FA.
+  // Edycja bio/dochodu: tylko ANALITYK+. OBSERWATOR widzi dane tylko do odczytu.
   import { onMount } from 'svelte';
   import axios from 'axios';
   let profile = {};
@@ -8,7 +11,7 @@
 
   $: canEdit = profile.role === 'ANALITYK' || profile.role === 'OPERACYJNY';
 
-  // 2FA state
+  // Stan maszyny 2FA: idle → verify (po setup QR) → z powrotem do idle po aktywacji
   let tfaStep   = 'idle';  // idle | setup | verify | disabling
   let qrDataUrl = '';
   let tfaCode   = '';

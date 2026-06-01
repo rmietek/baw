@@ -1,4 +1,7 @@
 <script>
+  // Modal ostrzeżenia o wygasaniu sesji — sprawdza co 5 s czy JWT wygaśnie w ciągu 2 min.
+  // Jeśli tak, wyświetla banner z przyciskiem "Przedłuż sesję" (wywołuje /api/refresh).
+  // Jeśli token już wygasł (remaining <= 0) — automatycznie wylogowuje użytkownika.
   import { onMount, onDestroy } from 'svelte';
   import { user, logout, refreshSession } from '../stores/auth';
 
@@ -10,6 +13,8 @@
   let extending = false;
   let interval;
 
+  // Sprawdza pozostały czas sesji i decyduje czy pokazać modal.
+  // Gdy czas <= 0 → wylogowuje użytkownika. Gdy <= WARN_MS → pokazuje modal z przyciskiem.
   function check() {
     const exp = $user.expiresAt;
     if (!$user.loggedIn || !exp) { show = false; return; }
@@ -19,6 +24,8 @@
     show = remaining <= WARN_MS;
   }
 
+  // Odświeża token przez POST /api/refresh, aktualizuje expiresAt w store i ukrywa modal.
+  // Gdy refresh się nie uda (np. token już wygasł) — wylogowuje.
   async function extend() {
     extending = true;
     try {
@@ -32,7 +39,7 @@
   }
 
   onMount(() => { check(); interval = setInterval(check, TICK_MS); });
-  onDestroy(() => clearInterval(interval));
+  onDestroy(() => clearInterval(interval));  // zatrzymuje polling przy odmontowaniu
 </script>
 
 {#if show}

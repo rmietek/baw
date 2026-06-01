@@ -1,4 +1,7 @@
 <script>
+  // Tablica meldunków operacyjnych — CRUD komentarzy z walidacją roli.
+  // Odczyt: publiczny. Dodawanie: ANALITYK+. Usuwanie: OPERACYJNY.
+  // Filtrowanie po treści/autorze realizowane client-side bez dodatkowych zapytań.
   import { onMount } from 'svelte';
   import axios from 'axios';
   import { user } from '../stores/auth';
@@ -10,16 +13,19 @@
   let flash    = '';
   let showAll  = false;
   let filter   = '';
-  const LIMIT  = 8;
+  const LIMIT  = 8;  // domyślnie wyświetlane komentarze — reszta ukryta za "Pokaż więcej"
 
+  // Reaktywne filtrowanie — przebiega w pamięci, nie wysyła nowych zapytań HTTP
   $: filtered = filter.trim()
     ? comments.filter(c => c.author?.toLowerCase().includes(filter.toLowerCase()) || c.content?.toLowerCase().includes(filter.toLowerCase()))
     : comments;
   $: visible = showAll ? filtered : filtered.slice(0, LIMIT);
 
   const api = 'comments';
+  // Sprawdza rolę z reaktywnego store — komponent automatycznie się aktualizuje przy zmianie sesji
   $: canPost = $user?.role === 'ANALITYK' || $user?.role === 'OPERACYJNY';
 
+  // Pobiera wszystkie komentarze z API i zapisuje w tablicy comments.
   async function load() {
     try {
       const { data } = await axios.get(`/api/${api}`);
@@ -29,6 +35,9 @@
 
   onMount(() => { load(); });
 
+  // Wysyła nowy komentarz (POST /api/comments).
+  // Walidacja client-side: niepuste content, maks. 2000 / 100 znaków.
+  // Autor domyślnie "ANONIM" gdy pole puste.
   async function post() {
     if (!canPost) { flash = 'Brak uprawnień'; return; }
     if (!content.trim()) { flash = 'Treść meldunku jest wymagana'; return; }
@@ -48,6 +57,7 @@
     }
   }
 
+  // Usuwa komentarz po ID (DELETE /api/comments/:id). Tylko OPERACYJNY — serwer weryfikuje.
   async function del(id) {
     try {
       await axios.delete(`/api/${api}/${id}`);

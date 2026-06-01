@@ -1,4 +1,7 @@
 <script>
+  // Modal profilu agenta — trzy sekcje: dane profilu, zmiana hasła, konfiguracja 2FA.
+  // Edycja dostępna dla ANALITYK+ (OBSERWATOR ma dostęp tylko do odczytu).
+  // 2FA: sekwencja setup → weryfikacja kodu → aktywacja (lub dezaktywacja z potwierdzeniem).
   import { onMount } from 'svelte';
   import axios from 'axios';
 
@@ -15,7 +18,8 @@
   let pwMsg   = '';
   let pwOk    = false;
 
-  // 2FA state
+  // Stan maszyny 2FA: idle → setup (QR) → verify (kod) → powrót do idle
+  // Dezaktywacja: idle → disabling (wymaga kodu) → idle
   let tfaStep   = 'idle';
   let qrDataUrl = '';
   let tfaCode   = '';
@@ -29,6 +33,8 @@
     } catch {}
   });
 
+  // Zapisuje bio i dochód (PUT /api/profile). Allowlisting po stronie serwera —
+  // przesyłane są tylko dozwolone pola, nie można przez to zmienić roli.
   async function saveProfile() {
     saveErr = '';
     try {
@@ -40,6 +46,8 @@
     }
   }
 
+  // Zmienia hasło (PUT /api/profile/password). Walidacja client-side:
+  // obecne hasło wymagane, nowe min. 8 znaków, oba pola muszą być zgodne.
   async function changePassword() {
     pwMsg = ''; pwOk = false;
     if (!pwForm.old_password) { pwMsg = 'Podaj obecne hasło'; return; }
@@ -56,6 +64,8 @@
     } catch (e) { pwMsg = e.response?.data?.error || 'Błąd zmiany hasła'; }
   }
 
+  // Krok 1 konfiguracji 2FA: generuje sekret TOTP i pobiera QR kod jako data URL.
+  // Po wywołaniu tfaStep = 'verify' — użytkownik skanuje QR i wpisuje kod.
   async function setup2FA() {
     tfaMsg = '';
     try {
@@ -65,6 +75,8 @@
     } catch { tfaMsg = 'Błąd generowania kodu QR'; }
   }
 
+  // Krok 2 konfiguracji 2FA: aktywuje 2FA po zweryfikowaniu pierwszego kodu TOTP.
+  // Dopiero po enable serwer oznacza totp_enabled=true — sam setup nie aktywuje.
   async function enable2FA() {
     tfaMsg = '';
     try {
@@ -75,6 +87,8 @@
     } catch (e) { tfaMsg = e.response?.data?.error || 'Nieprawidłowy kod'; }
   }
 
+  // Dezaktywuje 2FA — wymaga podania aktualnego kodu z aplikacji jako potwierdzenie.
+  // Po sukcesie zeruje totp_secret i totp_enabled w bazie.
   async function disable2FA() {
     tfaMsg = '';
     try {
@@ -85,6 +99,7 @@
     } catch (e) { tfaMsg = e.response?.data?.error || 'Nieprawidłowy kod'; }
   }
 
+  // Zamyka modal kliknięciem poza jego obszarem (na ciemne tło overlay).
   function handleOverlayClick(e) {
     if (e.target.classList.contains('modal-overlay')) onClose();
   }

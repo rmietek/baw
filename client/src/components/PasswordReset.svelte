@@ -1,12 +1,19 @@
 <script>
+  // Formularz resetu hasła — dwuetapowy przepływ:
+  //   Krok 1: żądanie tokenu przez ID agenta (POST /api/reset-password/request)
+  //   Krok 2: ustawienie nowego hasła z tokenem (POST /api/reset-password/confirm)
+  // Token TTL 15 min, przechowywany w pamięci serwera (nie wysyłany emailem w tej implementacji).
   import axios from 'axios';
   let agentId   = '';
-  let token     = '';
+  let token     = '';      // token resetu (w tej implementacji trzeba go wpisać ręcznie)
   let newPass   = '';
-  let reqResult = null;
-  let cfmResult = null;
-  let step      = 1;
+  let reqResult = null;    // wynik żądania tokenu
+  let cfmResult = null;    // wynik potwierdzenia resetu
+  let step      = 1;       // aktywny krok formularza (1 lub 2)
 
+  // Żąda tokenu resetu hasła dla podanego ID agenta (POST /api/reset-password/request).
+  // Po sukcesie przechodzi do kroku 2. Serwer stosuje rate limiting: max 5 żądań/h z IP.
+  // Odpowiedź serwera jest taka sama niezależnie od istnienia agenta (zapobiega enumeracji).
   async function requestReset() {
     reqResult = null;
     try {
@@ -18,6 +25,9 @@
     }
   }
 
+  // Potwierdza reset hasła podając token i nowe hasło (POST /api/reset-password/confirm).
+  // Token jednorazowy — po użyciu jest usuwany z pamięci serwera.
+  // Po sukcesie przechodzi do kroku 3 (komunikat końcowy).
   async function confirmReset() {
     cfmResult = null;
     try {

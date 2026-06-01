@@ -1,4 +1,7 @@
 <script>
+  // Pasek nawigacyjny — wyświetla logo, linki, status sesji i przyciski akcji.
+  // Renderuje Panel Admina (OPERACYJNY), timer tokenu i modal logowania/profilu
+  // w zależności od roli zalogowanego użytkownika.
   import { navigate } from 'svelte-routing';
   import { onMount, onDestroy } from 'svelte';
   import axios from 'axios';
@@ -11,11 +14,14 @@
   let showProfile = false;
   let showAdmin   = false;
 
-  // ── Token timer ──────────────────────────────────────────────────
+  // ── Timer odliczający czas do wygaśnięcia JWT ────────────────────
+  // Zmienia kolor: szary → żółty (< 2 min) → czerwony migający (< 1 min).
   let timeLeft = '';
   let timerClass = '';
   let timerInterval;
 
+  // Oblicza pozostały czas sesji i ustawia klasę CSS dla koloru (normalny / warn / danger).
+  // Wywoływana co sekundę — gdy ms <= 0 pokazuje 00:00 (nie ukrywa timera).
   function updateTimer() {
     const exp = $user?.expiresAt;
     if (!$user?.loggedIn || !exp) { timeLeft = ''; return; }
@@ -29,8 +35,9 @@
   }
 
   onMount(() => { updateTimer(); timerInterval = setInterval(updateTimer, 1000); });
-  onDestroy(() => clearInterval(timerInterval));
+  onDestroy(() => clearInterval(timerInterval));  // zatrzymuje timer gdy navbar zniknie z DOM
 
+  // Wysyła żądanie wylogowania do serwera (usuwa ciasteczko JWT), czyści store i przekierowuje.
   async function handleLogout() {
     await axios.post('/api/logout', {}, { withCredentials: true });
     logout();

@@ -1,12 +1,18 @@
 <script>
+  // Modal logowania/rejestracji — obsługuje trzy tryby:
+  //   step=1: formularz login (hasło) lub rejestracja
+  //   step=2: weryfikacja TOTP (po step=1 gdy 2FA aktywne, lub po OAuth)
+  // Po sukcesie ustawia store przez login() i zamyka modal.
+  // Walidacja client-side: długość, dozwolone znaki, min. 8 znaków hasła.
   import { onMount } from 'svelte';
   import { navigate } from 'svelte-routing';
   import axios from 'axios';
   import { login } from '../stores/auth';
 
   export let onClose = () => {};
-  export let initialPreAuthToken = '';
+  export let initialPreAuthToken = '';  // przekazywany gdy OAuth wymaga 2FA
 
+  // Animacja terminala — efekt pisania sekwencji wiadomości po otwarciu modala
   const TERM_MSGS = [
     '> INICJALIZACJA PROTOKOLU BEZPIECZENSTWA...',
     '> WERYFIKACJA CERTYFIKATU SSL: OK',
@@ -26,7 +32,7 @@
   let preAuthToken = initialPreAuthToken;
   let totpCode     = '';
 
-  // typewriter effect
+  // Efekt maszyny do pisania — pokazuje wiadomości terminala znak po znaku
   let timerRef = null;
   function startTypewriter() {
     let msgIdx = 0, charIdx = 0;
@@ -57,12 +63,17 @@
     };
   });
 
-  // get redirect param from URL
+  // Odczytuje parametr ?redirect= z URL — po zalogowaniu przekierowuje tam użytkownika.
+  // Walidacja: tylko ścieżki zaczynające się od / (zapobiega open redirect na zewnętrzne URL).
   function getRedirect() {
     const params = new URLSearchParams(window.location.search);
     return params.get('redirect') || '/';
   }
 
+  // Krok 1 logowania: wysyła credentials do /api/login.
+  // Jeśli serwer wymaga 2FA → przechodzi do step=2 z preAuthToken.
+  // Jeśli sukces bez 2FA → ustawia store i zamyka modal po 700 ms.
+  // 429 → komunikat o rate limitingu zamiast ogólnego błędu.
   async function handleLogin() {
     if (!username.trim()) { status = 'Podaj identyfikator agenta'; return; }
     if (!password)         { status = 'Podaj kod dostępu'; return; }
@@ -87,6 +98,8 @@
     } finally { loading = false; }
   }
 
+  // Krok 2 logowania (2FA): weryfikuje kod TOTP przez /api/2fa/login z preAuthToken.
+  // PreAuthToken ma TTL 5 min — po tym czasie serwer go odrzuci.
   async function handleTotp() {
     if (!totpCode.trim()) { status = 'Podaj kod z aplikacji'; return; }
     loading = true; status = '';
@@ -102,6 +115,10 @@
     } finally { loading = false; }
   }
 
+  // Rejestruje nowe konto (POST /api/register).
+  // Walidacja client-side: min 3 znaki ID, max 50, bez znaków < > " ' &, hasło min 8 znaków.
+  // Rola tylko OBSERWATOR lub ANALITYK — nie można zarejestrować OPERACYJNY.
+  // Po sukcesie przełącza na zakładkę logowania po 1.5 s.
   async function handleRegister() {
     if (!username.trim())   { status = 'Podaj identyfikator agenta'; return; }
     if (username.length > 50) { status = 'ID agenta max 50 znaków'; return; }
@@ -119,14 +136,17 @@
     } finally { loading = false; }
   }
 
+  // Obsługuje Enter w polach formularza — deleguje do odpowiedniej funkcji wg aktywnej zakładki.
   function handleKey(e) {
     if (e.key === 'Enter') tab === 'login' ? handleLogin() : handleRegister();
   }
 
+  // Zamyka modal kliknięciem na ciemne tło (overlay), ale nie na sam modal.
   function handleOverlayClick(e) {
     if (e.target.classList.contains('modal-overlay')) onClose();
   }
 
+  // Klasa CSS statusu — 'ok' dla sukcesu, 'err' dla błędu, '' gdy brak komunikatu.
   $: statusClass = status.includes('PRZYZNANY') || status.includes('UTWORZONE') ? 'ok' : status ? 'err' : '';
 </script>
 

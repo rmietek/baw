@@ -1,17 +1,21 @@
 <script>
+  // Powiązane konflikty (Liban, Jemen, Irak/Syria) — lista rozwijana z statystykami.
+  // Każdy konflikt ma wiele wierszy stat_key/stat_value. ANALITYK może dodawać statystyki,
+  // OPERACYJNY może je edytować i usuwać. Rozwinięcie/zwinięcie zarządzane przez obiekt `open`.
   import { onMount } from 'svelte';
   import axios from 'axios';
   import { user } from '../stores/auth';
 
   let conflicts   = [];
-  let open        = {};
-  let editing     = null;
-  let addForm     = null;
-  let newConflict = null;
+  let open        = {};      // { [conflict_id]: boolean } — stan rozwinięcia sekcji
+  let editing     = null;    // aktualnie edytowany wiersz statystyki
+  let addForm     = null;    // formularz dodawania nowej statystyki do konfliktu
+  let newConflict = null;    // formularz tworzenia nowego konfliktu
   let flash       = '';
 
   const api = 'conflicts';
 
+  // Pobiera wszystkie konflikty z API — wyniki zgrupowane po conflict_id po stronie serwera.
   async function load() {
     try {
       const { data } = await axios.get(`/api/${api}`);
@@ -21,13 +25,18 @@
 
   onMount(() => { load(); });
 
+  // Wyświetla komunikat sukcesu (zielony) lub błędu (czerwony) przez 2.5 s.
   function showFlash(msg, ok = true) {
     flash = { msg, ok };
     setTimeout(() => flash = '', 2500);
   }
 
+  // Przełącza rozwinięcie/zwinięcie sekcji konfliktu.
+  // Tworzy nowy obiekt zamiast mutacji — Svelte wykrywa zmianę i aktualizuje DOM.
   function toggle(id) { open = { ...open, [id]: !open[id] }; }
 
+  // Zapisuje edytowaną statystykę konfliktu (PUT /api/conflicts/:id).
+  // Tylko OPERACYJNY. Po sukcesie zeruje stan edycji i odświeża listę.
   async function saveEdit() {
     if (!isAdmin) return;
     try {
@@ -47,6 +56,8 @@
     }
   }
 
+  // Dodaje nowy wiersz statystyki do istniejącego konfliktu (POST /api/conflicts/:id/stats).
+  // Wymaga ANALITYK+. Walidacja: oba pola (klucz i wartość) muszą być niepuste.
   async function addStat() {
     if (!$user?.role || $user.role === 'OBSERWATOR') return;
     if (!addForm.key.trim() || !addForm.value.trim()) return;
@@ -64,6 +75,8 @@
     }
   }
 
+  // Usuwa pojedynczą statystykę konfliktu (DELETE /api/conflicts/stats/:id).
+  // Tylko OPERACYJNY. Nie usuwa całego konfliktu — tylko jeden wiersz stat.
   async function removeStat(statId) {
     if (!isAdmin) return;
     try {
@@ -75,6 +88,8 @@
     }
   }
 
+  // Tworzy nowy konflikt z pierwszą statystyką (region) (POST /api/conflicts).
+  // Wymaga ANALITYK+. Label jest wymagany; region i severity są opcjonalne.
   async function createConflict() {
     if (!$user?.role || $user.role === 'OBSERWATOR') return;
     if (!newConflict?.label?.trim()) return;
@@ -88,6 +103,7 @@
     }
   }
 
+  // Reaktywne uprawnienia — przeliczane automatycznie przy zmianie roli w store
   $: canAdd  = $user?.role === 'ANALITYK' || $user?.role === 'OPERACYJNY';
   $: isAdmin = $user?.role === 'OPERACYJNY';
 

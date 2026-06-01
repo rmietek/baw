@@ -1,16 +1,19 @@
 <script>
+  // Panel administracyjny OPERACYJNY — zarządzanie statystykami konfliktu, komentarzami i live feed.
+  // Dostępny tylko dla roli OPERACYJNY (weryfikacja po stronie serwera przy każdym zapytaniu).
+  // Dane ładowane przy montowaniu: statystyki, komentarze, wpisy live feed.
   import { onMount } from 'svelte';
   import axios from 'axios';
 
   export let onClose = () => {};
 
-  let stats       = {};
-  let comments    = [];
-  let edits       = {};
-  let saving      = {};
-  let feedEntries = [];
+  let stats       = {};   // słownik stat_key → stat_value (war_stats)
+  let comments    = [];   // wszystkie komentarze do moderacji
+  let edits       = {};   // lokalny stan edycji wartości statystyk (przed zapisem)
+  let saving      = {};   // flagi ładowania per-klucz (blokuje przycisk Zapisz)
+  let feedEntries = [];   // aktualne wpisy live feed
   let feedForm    = { type: 'info', message: '' };
-  let feedFlash   = '';
+  let feedFlash   = '';   // komunikat potwierdzenia/błędu po dodaniu wpisu
 
   const STAT_LABELS = {
     total_cost_usd:      'Koszt całkowity (USD)',

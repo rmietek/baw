@@ -1,28 +1,34 @@
 <script>
+  // Petycja obywatelska — podpisywanie, licznik na żywo, statystyki i dziennik podpisów.
+  // Auto-odświeżanie co 15 s. Nowe podpisy wyróżniane animacją przez 2 s.
+  // Rate limiting: serwer odrzuca więcej niż 1 podpis na minutę z jednego IP.
   import { onMount } from 'svelte';
   import axios from 'axios';
   import { user } from '../stores/auth';
 
-  let total        = null;
-  let recent       = [];
+  let total        = null;        // łączna liczba podpisów z serwera
+  let recent       = [];          // 20 ostatnich podpisów
   let name         = '';
   let comment      = '';
   let loading      = false;
   let flash        = '';
   let showAll      = false;
-  let displayTotal = null;
-  let prevTotal    = null;
+  let displayTotal = null;        // animowany licznik wyświetlany w UI
+  let prevTotal    = null;        // poprzednia wartość — do animacji różnicy
 
   const api    = 'petition';
   let filter   = '';
   let newIds   = new Set();
   let prevIds  = new Set();
 
+  // Pobiera aktualną liczbę podpisów i 20 ostatnich wpisów z API.
+  // Wykrywa nowe podpisy (różnica newIds vs prevIds) i wyróżnia je animacją przez 2 s.
   async function load() {
     try {
       const { data } = await axios.get(`/api/${api}`);
       total  = data.total;
       const incoming = data.recent;
+      // Znajdź IDs które nie były w poprzednim zestawie — to nowe podpisy
       newIds = new Set(incoming.filter(s => !prevIds.has(s.id)).map(s => s.id));
       if (newIds.size > 0) setTimeout(() => { newIds = new Set(); }, 2000);
       prevIds = new Set(incoming.map(s => s.id));
@@ -32,8 +38,9 @@
 
   onMount(() => {
     load();
+    // Auto-odświeżanie co 15 s — nie używa WebSocket, tylko polling
     const iv = setInterval(load, 15000);
-    return () => clearInterval(iv);
+    return () => clearInterval(iv);  // cleanup przy odmontowaniu
   });
 
   $: filtered = filter.trim()
@@ -55,7 +62,8 @@
 
   $: topComments = recent.filter(s => s.comment?.trim()).slice(0, 3);
 
-  // animate counter
+  // Animacja licznika: gdy total wzrośnie, displayTotal stopniowo dochodzi do nowej wartości
+  // przez 20 kroków co 40 ms — tworzy efekt "odliczania" nowych podpisów.
   $: {
     if (total !== null) {
       if (prevTotal === null) {
@@ -79,11 +87,15 @@
     }
   }
 
+  // Wyświetla komunikat flash przez 3 s.
   function showFlash(msg, ok = true) {
     flash = { msg, ok };
     setTimeout(() => flash = '', 3000);
   }
 
+  // Podpisuje petycję (POST /api/petition/sign). Wymaga logowania (dowolna rola).
+  // Walidacja: imię wymagane, maks. 255 znaków, komentarz maks. 500.
+  // Serwer stosuje rate limiting: 1 podpis/minutę z jednego IP.
   async function sign() {
     if (!$user?.role) { showFlash('Wymagane logowanie — rola co najmniej OBSERWATOR', false); return; }
     if (!name.trim())         { showFlash('Podaj imię lub pseudonim', false); return; }
@@ -103,6 +115,8 @@
     }
   }
 
+  // Usuwa podpis (DELETE /api/petition/:id). Tylko OPERACYJNY — guard po stronie klienta
+  // i po stronie serwera (duplikacja dla lepszego UX).
   async function del(id) {
     if ($user?.role !== 'OPERACYJNY') return;
     await axios.delete(`/api/${api}/${id}`, { withCredentials: true });

@@ -1,8 +1,12 @@
 <script>
+  // Raporty wywiadowcze — widok filtrowany przez clearance server-side.
+  // OBSERWATOR widzi tylko JAWNE, ANALITYK + TAJNE, OPERACYJNY wszystkie.
+  // Filtr clearance jest wymuszony w SQL na serwerze — nie tylko UI.
   import { onMount } from 'svelte';
   import axios from 'axios';
   import { user } from '../stores/auth';
 
+  // Mapy CSS klas dla oznaczeń klauzuli tajności
   const BADGE = { 'JAWNY': 'jawny', 'TAJNY': 'tajny', 'ŚCIŚLE TAJNY': 'scisle' };
   const CARD  = { 'JAWNY': '',      'TAJNY': 'tajny', 'ŚCIŚLE TAJNY': 'scisle' };
 
@@ -14,6 +18,7 @@
 
   const api = 'reports';
 
+  // Pobiera raporty dostępne dla roli bieżącego użytkownika (clearance filtrowany server-side).
   async function load() {
     try {
       const { data } = await axios.get(`/api/${api}`);
@@ -23,6 +28,7 @@
 
   onMount(() => { load(); });
 
+  // Wyświetla komunikat flash przez 2.5 s — zielony (ok=true) lub czerwony.
   function showFlash(msg, ok = true) {
     flash = { msg, ok };
     setTimeout(() => flash = '', 2500);
@@ -30,6 +36,8 @@
 
   $: canSubmit = $user?.role === 'ANALITYK' || $user?.role === 'OPERACYJNY';
 
+  // Dodaje nowy raport (POST /api/reports). Wymaga ANALITYK+.
+  // clearance pobierany z formularza — serwer waliduje i normalizuje do allowlisty.
   async function submit() {
     if (!canSubmit) { showFlash('Wymagana rola: ANALITYK lub wyższa', false); return; }
     if (!form.title.trim() || !form.content.trim()) return;
@@ -46,6 +54,7 @@
     }
   }
 
+  // Import z zewnętrznego News API — endpoint niedostępny w obecnej wersji serwera.
   async function fetchNews() {
     return; // fetch-news niedostępny
     newsLoading = true;

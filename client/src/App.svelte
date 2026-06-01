@@ -1,4 +1,5 @@
 <script>
+  // Główny komponent aplikacji — konfiguruje routing, obsługuje wynik OAuth i inicjalizuje sesję.
   import { Router, Route, navigate } from 'svelte-routing';
   import { onMount } from 'svelte';
   import { initAuth, user } from './stores/auth';
@@ -7,11 +8,14 @@
   import LoginModal from './components/LoginModal.svelte';
   import Dashboard from './pages/Dashboard.svelte';
 
-  let need2fa        = false;
-  let oauthMsg       = '';
-  let oauthPreToken  = '';
+  // Flagi stanu OAuth — ustawiane na podstawie parametrów URL po powrocie od Google
+  let need2fa        = false;  // użytkownik ma 2FA, wymagana weryfikacja TOTP
+  let oauthMsg       = '';     // komunikat o błędzie OAuth (konto istnieje, błąd itp.)
+  let oauthPreToken  = '';     // preAuthToken do przekazania do LoginModal (krok 2FA po OAuth)
 
   onMount(async () => {
+    // Odczyt parametrów ?oauth=... po przekierowaniu z /api/auth/google/callback.
+    // Po obsłudze parametry są usuwane z URL (replaceState) — brak śladów w historii.
     const params = new URLSearchParams(window.location.search);
     const oauth  = params.get('oauth');
     if (oauth === 'success') {

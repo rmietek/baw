@@ -1,8 +1,12 @@
 <script>
+  // Ocena Strat Bojowych (Battle Damage Assessment) — wyświetla tabelę strat i agreguje sumy.
+  // Dodawanie wpisów: tylko OPERACYJNY. Walidacja client-side pokrywa się z walidacją serwera
+  // (format daty YYYY-MM-DD, max długości pól, count >= 0).
   import { onMount } from 'svelte';
   import axios from 'axios';
   import { user } from '../stores/auth';
 
+  // Mapy CSS klas dla stron konfliktu
   const SIDE_CLASS = { IRAN: 'side-iran', KOALICJA: 'side-koalicja', CYWILE: 'side-cywile' };
   const EMPTY_FORM = { event_date: '', location: '', side: 'IRAN', category: 'MILITARNE', count: '', description: '' };
 
@@ -13,6 +17,7 @@
 
   const api = 'casualties';
 
+  // Pobiera wszystkie wpisy strat bojowych posortowane od najnowszych.
   async function load() {
     try {
       const { data } = await axios.get(`/api/${api}`);
@@ -22,11 +27,15 @@
 
   onMount(() => { load(); });
 
+  // Wyświetla komunikat flash przez 2.5 s.
   function showFlash(msg, ok = true) {
     flash = { msg, ok };
     setTimeout(() => flash = '', 2500);
   }
 
+  // Dodaje nowy wpis strat (POST /api/casualties). Tylko OPERACYJNY.
+  // Walidacja: format daty YYYY-MM-DD, niepuste pola, count >= 0, maks. długości.
+  // side i category walidowane allowlistą — niezgodne wartości odrzucane przez serwer.
   async function submit() {
     if ($user?.role !== 'OPERACYJNY') { showFlash('Wymagana rola: OPERACYJNY', false); return; }
     if (!form.event_date)         { showFlash('Data jest wymagana', false); return; }
@@ -49,6 +58,7 @@
     }
   }
 
+  // Reaktywna agregacja sum strat per strona — przeliczana przy każdej zmianie rows.
   $: totals = rows.reduce((acc, r) => {
     acc[r.side] = (acc[r.side] || 0) + Number(r.count);
     return acc;

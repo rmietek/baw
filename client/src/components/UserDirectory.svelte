@@ -1,14 +1,21 @@
 <script>
+  // Katalog agentów — tabela wszystkich użytkowników systemu.
+  // Widoczna i możliwa do pobrania tylko przez OPERACYJNY.
+  // Dane ładowane na żądanie (przycisk "Pobierz katalog") — nie przy montowaniu komponentu.
+  // Filtrowanie client-side po agent_id i roli.
   import axios from 'axios';
   import { user } from '../stores/auth';
 
+  // Kolory odznak ról (użyte w <span class="role-badge">)
   const ROLE_COLOR = { OPERACYJNY: 'var(--red-bright)', ANALITYK: 'var(--gold)', OBSERWATOR: 'var(--blue)' };
 
   let users   = [];
   let loading = false;
-  let fetched = false;
+  let fetched = false;   // czy dane zostały już pobrane — steruje widocznością tabeli vs. przycisku
   let search  = '';
 
+  // Pobiera katalog agentów z API (GET /api/users). Tylko OPERACYJNY — serwer weryfikuje.
+  // Nie zwraca hasła ani totp_secret. Po sukcesie pokazuje tabelę zamiast przycisku.
   async function load() {
     loading = true;
     try {
@@ -18,6 +25,7 @@
     } finally { loading = false; }
   }
 
+  // Filtruje listę agentów client-side po agent_id lub roli — bez nowych zapytań HTTP.
   $: filtered = users.filter(u =>
     u.agent_id.toLowerCase().includes(search.toLowerCase()) ||
     u.role.toLowerCase().includes(search.toLowerCase())

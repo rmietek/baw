@@ -1,10 +1,15 @@
 <script>
+  // Kalkulator podatku — oblicza hipotetyczny wkład użytkownika w koszty konfliktu.
+  // Algorytm: podatek federalny USA wg progów podatkowych (single/married),
+  // następnie 54% (udział wydatków wojskowych w budżecie) * 2.3% (udział operacji Iran).
+  // Wynik zapisywany do bazy przez /api/tax-calculation.
   import axios from 'axios';
-  export let totalCost = 0;
+  export let totalCost = 0;  // całkowity koszt konfliktu przekazywany z Dashboard
 
+  // Stałe proporcji budżetowych (źródło: Pentagon / SIPRI)
   const WAR_COST_PER_SEC = 5480;
-  const MIL_BUDGET_RATIO = 0.54;
-  const IRAN_RATIO       = 0.023;
+  const MIL_BUDGET_RATIO = 0.54;  // 54% podatków trafia do budżetu wojskowego
+  const IRAN_RATIO       = 0.023; // 2.3% wydatków wojskowych to operacje Iran
 
   let income = '';
   let status = 'single';
@@ -12,6 +17,10 @@
 
   function fmt(n) { return '$' + Number(n).toLocaleString('en-US'); }
 
+  // Oblicza podatek federalny USA metodą progów podatkowych (marginal tax rate),
+  // następnie wylicza hipotetyczny wkład w koszty konfliktu.
+  // Wynik zapisywany do bazy przez serwer (błąd zapisu ignorowany — nie blokuje UI).
+  // 2080 = liczba godzin pracy rocznie (52 tygodnie × 40 h).
   async function calculate() {
     const inc = parseFloat(income);
     if (!inc || inc <= 0) return;
@@ -22,16 +31,17 @@
 
     let tax = 0;
     for (const [low, high, rate] of TAX_BRACKETS) {
+      // Dla każdego progu: oblicz podatek tylko od dochodu powyżej dolnej granicy
       if (inc > low) tax += (Math.min(inc, high) - low) * rate;
     }
 
-    const milShare  = tax * MIL_BUDGET_RATIO;
-    const iranShare = milShare * IRAN_RATIO;
-    const perHour   = iranShare / 2080;
+    const milShare  = tax * MIL_BUDGET_RATIO;  // część podatku trafiająca do wojska
+    const iranShare = milShare * IRAN_RATIO;    // część wydatków wojskowych na Iran
+    const perHour   = iranShare / 2080;         // wkład na godzinę pracy
 
     try {
       await axios.post('/api/tax-calculation', { income: inc, tax_status: status }, { withCredentials: true });
-    } catch { /* ignoruj błąd zapisu */ }
+    } catch { /* ignoruj błąd zapisu — wynik i tak pokazany użytkownikowi */ }
 
     result = { tax: Math.round(tax), mil: Math.round(milShare), iran: iranShare, ps: perHour.toFixed(4) };
   }

@@ -1,4 +1,7 @@
 <script>
+  // Oś czasu konfliktu — chronologiczna lista wydarzeń z podziałem na zwykłe i przełomowe.
+  // Dodawanie: ANALITYK+. Usuwanie i zmiana flagi is_major: OPERACYJNY.
+  // Toggle "PRZEŁOMOWE" zmienia wygląd wpisu (większy, wyróżniony) bez przeładowania listy.
   import { onMount } from 'svelte';
   import axios from 'axios';
   import { user } from '../stores/auth';
@@ -11,6 +14,7 @@
 
   const api = 'timeline';
 
+  // Pobiera wszystkie zdarzenia osi czasu — posortowane malejąco po id (najnowsze na górze).
   async function load() {
     try {
       const { data } = await axios.get(`/api/${api}`);
@@ -20,11 +24,14 @@
 
   onMount(() => { load(); });
 
+  // Wyświetla komunikat flash przez 2.5 s.
   function showFlash(msg, ok = true) {
     flash = { msg, ok };
     setTimeout(() => flash = '', 2500);
   }
 
+  // Dodaje nowe zdarzenie (POST /api/timeline). Wymaga ANALITYK+.
+  // Walidacja: data i tytuł wymagane. Format daty swobodny (np. "19 KWI 2026").
   async function submit() {
     if (!form.event_date || !form.title.trim()) return;
     loading = true;
@@ -40,6 +47,8 @@
     }
   }
 
+  // Usuwa zdarzenie (DELETE /api/timeline/:id). Wymaga OPERACYJNY.
+  // Optymistyczna aktualizacja UI: usuwa z lokalnej tablicy bez pełnego przeładowania.
   async function remove(id) {
     try {
       await axios.delete(`/api/${api}/${id}`);
@@ -50,6 +59,8 @@
     }
   }
 
+  // Przełącza flagę is_major zdarzenia (PATCH /api/timeline/:id). Wymaga OPERACYJNY.
+  // Optymistyczna aktualizacja: zmienia stan lokalnie bez pełnego przeładowania listy.
   async function toggleMajor(ev) {
     try {
       await axios.patch(`/api/timeline/${ev.id}`, { is_major: !ev.is_major });
