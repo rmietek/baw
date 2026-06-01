@@ -248,22 +248,28 @@
           if (intc.explodeTimer > 20) { removeMissile(scene, intc); interceptors.splice(i, 1); }
           continue;
         }
-        // Jeśli cel już zniszczony — przechwytnik znika bez wybuchu
+        // jeśli rakieta już eksplodowała zanim przechwytnik do niej dotarł — znikamy cicho
         if (intc.target.done) { intc.done = true; intc.head.visible = intc.glow.visible = false; continue; }
-        const tp  = intc.target.head.position;
-        const dx  = tp.x - intc.pos.x, dy = tp.y - intc.pos.y;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        // Kolizja: oba obiekty zniszczone, eksplozja w punkcie spotkania (niebieska)
+
+        const tp  = intc.target.head.position; // aktualna pozycja rakiety (cel) w tej klatce
+        const dx  = tp.x - intc.pos.x;         // różnica X między celem a przechwytnikiem
+        const dy  = tp.y - intc.pos.y;         // różnica Y między celem a przechwytnikiem
+        const dist = Math.sqrt(dx*dx + dy*dy); // rzeczywista odległość (tw. Pitagorasa)
+
+        // kolizja gdy odległość < 22 px — oba obiekty zniszczone, eksplozja w punkcie spotkania
         if (dist < 22) {
-          const ix = (intc.pos.x + tp.x) / 2, iy = (intc.pos.y + tp.y) / 2;
-          intc.done = intc.target.done = true;
-          intc.head.visible = intc.glow.visible = false;
-          intc.target.head.visible = intc.target.glow.visible = false;
-          explosions.push(spawnExplosion(scene, ix, iy, 0x55ddff));
+          const ix = (intc.pos.x + tp.x) / 2, iy = (intc.pos.y + tp.y) / 2; // środek między nimi
+          intc.done = intc.target.done = true;                                 // oznacz oba jako zniszczone
+          intc.head.visible = intc.glow.visible = false;                       // ukryj przechwytnik
+          intc.target.head.visible = intc.target.glow.visible = false;         // ukryj rakietę
+          explosions.push(spawnExplosion(scene, ix, iy, 0x55ddff));            // niebieska eksplozja
           continue;
         }
-        const spd = intc.speed / dist;
-        intc.pos.x += dx * spd; intc.pos.y += dy * spd;
+
+        const spd = intc.speed / dist;   // współczynnik normalizacji: speed/dist = ile % dystansu pokonać
+        // dx * spd = (dx/dist) * speed → znormalizowany kierunek × prędkość = stały krok niezależnie od odległości
+        intc.pos.x += dx * spd; // przesuń przechwytnik o dokładnie intc.speed pikseli w stronę celu (X)
+        intc.pos.y += dy * spd; // przesuń przechwytnik o dokładnie intc.speed pikseli w stronę celu (Y)
         intc.head.position.copy(intc.pos); intc.glow.position.copy(intc.pos);
         updateTrail(intc, intc.pos.x, intc.pos.y);
       }
