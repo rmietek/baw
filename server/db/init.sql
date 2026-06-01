@@ -174,7 +174,7 @@ CREATE TABLE casualties (
   reported_by INT          DEFAULT NULL,
   created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-  -- CHECK: liczba strat nieujemna (eliminuje Mass Assignment: count=-999)
+  -- CHECK: liczba strat nieujemna 
   CONSTRAINT chk_casualties_count
     CHECK (count >= 0),
 
